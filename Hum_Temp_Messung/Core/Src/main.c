@@ -21,16 +21,38 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "string.h"
+#include "stdio.h"
+#include <stdbool.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+// Neue Variablen als Integer (2 Dezimalstellen, z.B. 2345 = 23,45°C)
+int32_t temperature_x100 = 0;
+int32_t humidity_x100 = 0;
+
+bool esp_connected = false;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define RX_BUF_SIZE          1500
+
+// --- WLAN Zugangsdaten ---
+#define WIFI_SSID            "TylerTest"
+#define WIFI_PASS            "12345678"
+
+// --- Ziel: ESP#2 (TCP-Server) ---
+#define ESP2_IP              "10.162.73.104"   // <- später anpassen!
+#define ESP2_PORT            5000             // <- später anpassen!
+
+// --- Sendeintervall ---
+#define SEND_INTERVAL_MS     4000
 
 /* USER CODE END PD */
 
@@ -61,6 +83,52 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* ----------------------------------------------------------
+ *  Sensor auslesen
+ * ---------------------------------------------------------- */
+void sht3x_read(void) {
+
+  HAL_UART_Transmit(&huart2, (uint8_t*)"Lese Sensor...\r\n", 17, HAL_MAX_DELAY);
+
+  uint8_t cmd[] = {0x24, 0x00};  // Single shot, high repeatability, no clock stretching, Messung mit hoher Genauigkeit
+  uint8_t data[6]; //6 Bytes von SHT3X für die Werte
+  char msg[64];    //Für Textuelle Ausgabe
+
+  if (HAL_I2C_Master_Transmit(&hi2c1, (0x44 << 1), cmd, 2, HAL_MAX_DELAY) != HAL_OK) {    //Sendet cmd mit 2 Bytes und überprüft ob es geklappt hat
+    HAL_UART_Transmit(&huart2, (uint8_t*)"Fehler beim Senden\r\n", 22, HAL_MAX_DELAY);    //Fehlermeldung Falls es nicht geklappt hat
+    return;
+  }
+
+  HAL_Delay(15);  // Messzeit abwarten(Wert von Datenblatt)
+
+  if (HAL_I2C_Master_Receive(&hi2c1, (0x44 << 1), data, 6, HAL_MAX_DELAY) != HAL_OK) {    //Es werden 6 Bytes(Werte) vom Sensor in das Array data eingelesen und überprüft ob es geklappt hat
+    HAL_UART_Transmit(&huart2, (uint8_t*)"Fehler beim Empfangen\r\n", 25, HAL_MAX_DELAY); //Fehlermeldung Falls es nicht geklappt hat
+    return;
+  }
+
+  // Temperatur berechnen, ohne float
+  uint16_t temp_raw = (data[0] << 8) | data[1]; //Rohwerte zusammenbauen
+  // Formel: temp = -45 + 175 * (temp_raw / 65535)
+  // Umrechnung in Ganzzahl mit Faktor 100:
+  // temperature_x100 = (-45 + 175 * temp_raw / 65535) * 100
+  // => temperature_x100 = -4500 + (17500 * temp_raw) / 65535
+  temperature_x100 = -4500 + (17500 * (int32_t)temp_raw) / 65535; //Berechnung von Temp Werten
+
+  // Feuchtigkeit berechnen, ohne float
+  uint16_t hum_raw = (data[3] << 8) | data[4]; //Rohwerte zusammenbauen
+  // Formel: humidity = 100 * (hum_raw / 65535)
+  // => humidity_x100 = (10000 * hum_raw) / 65535
+  humidity_x100 = (10000 * (int32_t)hum_raw) / 65535; //Berechnung von Hum Werten
+
+  // Ausgabe über UART, mit fester Kommazahl (2 Dezimalstellen)
+  snprintf(msg, sizeof(msg), "Temp: %ld.%02ld C, Feuchte: %ld.%02ld %%\r\n",
+           temperature_x100 / 100, temperature_x100 % 100, //Werte mit 2 Kommastellen angeben
+           humidity_x100 / 100, humidity_x100 % 100);      //Werte mit 2 Kommastellen angeben
+
+  //HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+
+}
 
 /* USER CODE END 0 */
 
