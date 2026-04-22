@@ -130,6 +130,71 @@ void sht3x_read(void) {
 
 }
 
+void ESP_SendCmd(const char *cmd, uint32_t timeout)
+{
+    uint8_t rx[RX_BUF_SIZE];
+    uint16_t idx = 0;
+    uint8_t ch;
+    uint32_t start = HAL_GetTick();
+
+    memset(rx, 0, RX_BUF_SIZE);
+    HAL_UART_Transmit(&huart1, (uint8_t*)cmd, strlen(cmd), HAL_MAX_DELAY);
+
+    // Debug-Ausgabe
+    HAL_UART_Transmit(&huart2, (uint8_t*)">>> ", 4, HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t*)cmd, strlen(cmd), HAL_MAX_DELAY);
+
+    while ((HAL_GetTick() - start) < timeout && idx < (RX_BUF_SIZE - 1))
+    {
+        if (HAL_UART_Receive(&huart1, &ch, 1, 200) == HAL_OK)
+        {
+            rx[idx++] = ch;
+        }
+    }
+    rx[idx] = '\0';
+    HAL_UART_Transmit(&huart2, (uint8_t*)" <- ", 4, HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart2, rx, strlen((char*)rx), HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t*)"\r\n", 2, HAL_MAX_DELAY);
+}
+
+void ESP_Init(void)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t*)"\r\n--- ESP WLAN Verbinden (Client) ---\r\n", 38, HAL_MAX_DELAY);
+
+    // 1) Test, Reset, Basis-Setup
+    ESP_SendCmd("AT\r\n", 2000);
+    HAL_Delay(300);
+    ESP_SendCmd("AT+RST\r\n", 5000);
+    HAL_Delay(3000); // warten bis "ready"
+    ESP_SendCmd("AT\r\n", 2000);
+    HAL_Delay(300);
+    ESP_SendCmd("ATE0\r\n", 1000);              // Echo aus
+    HAL_Delay(100);
+    ESP_SendCmd("AT+CIPDINFO=0\r\n", 1000);     // kompakter +IPD-Header
+    HAL_Delay(100);
+
+    // 2) Station-Mode
+    ESP_SendCmd("AT+CWMODE_DEF=1\r\n", 2000);
+    HAL_Delay(200);
+
+    // 3) Vorherige WLAN-Verbindung trennen
+    ESP_SendCmd("AT+CWQAP\r\n", 2000);
+    HAL_Delay(200);
+
+    // 4) Mit WLAN verbinden (Hotspot)
+    char joinCmd[128];
+    snprintf(joinCmd, sizeof(joinCmd), "AT+CWJAP=\"%s\",\"%s\"\r\n", WIFI_SSID, WIFI_PASS);
+    ESP_SendCmd(joinCmd, 30000);
+    HAL_Delay(1000);
+
+    // 5) IP anzeigen
+    ESP_SendCmd("AT+CIFSR\r\n", 3000);
+
+    // 6) Single-Connection-Mode
+    ESP_SendCmd("AT+CIPMUX=0\r\n", 2000);
+    HAL_Delay(200);
+}
+
 
 
 /* USER CODE END 0 */
