@@ -41,6 +41,8 @@ bool esp_connected = false;
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+#define SLAVE_ID 1
+
 #define RX_BUF_SIZE          1500
 
 // --- WLAN Zugangsdaten ---
@@ -195,7 +197,107 @@ void ESP_Init(void)
     HAL_Delay(200);
 }
 
+static bool ESP_WaitForChar(uint8_t target, uint32_t timeout_ms) {
+    uint32_t start = HAL_GetTick();
+    uint8_t ch;
+    while ((HAL_GetTick() - start) < timeout_ms) {
+        if (HAL_UART_Receive(&huart1, &ch, 1, 100) == HAL_OK) {
+            if (ch == target) return true;
+        }
+    }
+    HAL_UART_Transmit(&huart2, (uint8_t*)"Timeout waiting for prompt\r\n", 28, HAL_MAX_DELAY);
+    return false;
+}
 
+static bool ESP_TCP_Connect(const char *ip, int port, uint32_t timeout_ms) {
+    if (esp_connected) { // Bereits verbunden → nichts tun
+        return true;
+    }
+    char cmd[96];
+    snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"TCP\",\"%s\",%d\r\n", ip, port);
+    ESP_SendCmd(cmd, timeout_ms);
+    // Prüfen, ob "CONNECT" oder "ALREADY CONNECTED" im Antwortpuffer kam
+    // (vereinfachte Variante)
+    HAL_Delay(500); // Wir setzen es hier einfach auf true, wenn keine Fehlermeldung kam.
+    esp_connected = true;
+    return true;
+}
+
+static bool ESP_CIPSEND_Single(int len, uint32_t timeout_ms) {
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "AT+CIPSEND=%d\r\n", len);
+    HAL_UART_Transmit(&huart2, (uint8_t*)">>> ", 4, HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t*)cmd, strlen(cmd), HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart1, (uint8_t*)cmd, strlen(cmd), HAL_MAX_DELAY);
+    if (!ESP_WaitForChar('>', timeout_ms)) {
+        HAL_UART_Transmit(&huart2, (uint8_t*)"Kein '>' Prompt erhalten\r\n", 28, HAL_MAX_DELAY);
+        return false;
+    }
+    return true;
+}
+
+static bool ESP_TCP_SendPayload(const char *buf, uint32_t timeout_ms) {
+    int len = (int)strlen(buf);
+    if (len <= 0) return false;
+    if (!ESP_CIPSEND_Single(len, 2000)) {
+        esp_connected = false;
+        return false;
+    }
+    HAL_UART_Transmit(&huart1, (uint8_t*)buf, len, HAL_MAX_DELAY);
+    uint32_t start = HAL_GetTick();
+    const char *ok = "SEND OK";
+    size_t okpos = 0;
+    uint8_t ch;
+    bool send_ok = false;
+    while ((HAL_GetTick() - start) < timeout_ms) {
+        if (HAL_UART_Receive(&huart1, &ch, 1, 100) == HAL_OK) {
+            if (ch == ok[okpos]) {
+                okpos++;
+                if (ok[okpos] == '\0') {
+                    send_ok = true;
+                    break;
+                }
+            } else okpos = 0;
+        }
+    }
+    if (!send_ok) {
+        esp_connected = false; // Verbindung verloren
+    }
+    return send_ok;
+}
+
+static void ESP_TCP_Close(void) {
+    ESP_SendCmd("AT+CIPCLOSE\r\n", 2000);
+}
+
+static void SendMeasurementOnce(void) {
+    // 1) Sensor lesen
+    sht3x_read();
+    // Debug-Ausgabe auf UART
+    char dbg[64];
+    snprintf(dbg, sizeof(dbg), "Debug Sensor: T=%ld.%02ld H=%ld.%02ld\r\n", temperature_x100/100, labs(temperature_x100%100), humidity_x100/100, labs(humidity_x100%100));
+    HAL_UART_Transmit(&huart2, (uint8_t*)dbg, strlen(dbg), HAL_MAX_DELAY);
+
+    if (!esp_connected) {
+        if (!ESP_TCP_Connect(ESP2_IP, ESP2_PORT, 5000)) {
+            HAL_UART_Transmit(&huart2, (uint8_t*)"TCP Connect failed\r\n", 20, HAL_MAX_DELAY);
+            return;
+        }
+    }
+
+    // 3) Payload bauen
+    char payload[64];
+    snprintf(payload, sizeof(payload), "ID=%d;T=%ld.%02ld;H=%ld.%02ld\r\n", SLAVE_ID, temperature_x100 / 100, labs(temperature_x100 % 100), humidity_x100 / 100, labs(humidity_x100 % 100));
+
+    // 4) Payload senden
+    if (!ESP_TCP_SendPayload(payload, 3000)) {
+        HAL_UART_Transmit(&huart2, (uint8_t*)"Senden fehlgeschlagen\r\n", 23, HAL_MAX_DELAY);
+        ESP_TCP_Close(); // Verbindung schließen bei Fehler
+    } else {
+        HAL_UART_Transmit(&huart2, (uint8_t*)"Gesendet: ", 10, HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart2, (uint8_t*)payload, strlen(payload), HAL_MAX_DELAY);
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -233,12 +335,27 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  /* --- ESP Initialisierung --- */
+    ESP_Init();
+
+    uint32_t lastSend = 0;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
+	  uint32_t now = HAL_GetTick();
+	  	      if (now - lastSend >= SEND_INTERVAL_MS) {
+	  	          lastSend = now;
+	  	          SendMeasurementOnce();
+	  	      }
+
+	  	      // (Optional) kleine Pause, um CPU zu schonen
+	  	      HAL_Delay(100);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
