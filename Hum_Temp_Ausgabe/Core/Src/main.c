@@ -21,7 +21,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,6 +34,15 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define RX_BUF_SIZE 1500
+
+// WLAN Zugangsdaten (Hotspot)
+#define WIFI_SSID "TylerTest"
+#define WIFI_PASS "12345678"
+
+// TCP Server-Port
+#define SERVER_PORT 5000
 
 /* USER CODE END PD */
 
@@ -61,6 +73,26 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void ESP_SendCmd(const char *cmd, uint32_t timeout) {
+	uint8_t rx[RX_BUF_SIZE];
+	uint16_t idx = 0;
+	uint8_t ch;
+	uint32_t start = HAL_GetTick();
+	memset(rx, 0, RX_BUF_SIZE);
+	HAL_UART_Transmit(&huart1, (uint8_t*) cmd, strlen(cmd), HAL_MAX_DELAY); // Debug-Ausgabe
+	HAL_UART_Transmit(&huart2, (uint8_t*) ">>> ", 4, HAL_MAX_DELAY);
+	HAL_UART_Transmit(&huart2, (uint8_t*) cmd, strlen(cmd), HAL_MAX_DELAY);
+	while ((HAL_GetTick() - start) < timeout && idx < (RX_BUF_SIZE - 1)) {
+		if (HAL_UART_Receive(&huart1, &ch, 1, 200) == HAL_OK) {
+			rx[idx++] = ch;
+		}
+	}
+	rx[idx] = '\0';
+	HAL_UART_Transmit(&huart2, (uint8_t*) " <- ", 4, HAL_MAX_DELAY);
+	HAL_UART_Transmit(&huart2, rx, strlen((char*) rx), HAL_MAX_DELAY);
+	HAL_UART_Transmit(&huart2, (uint8_t*) "\r\n", 2, HAL_MAX_DELAY);
+}
 
 /* USER CODE END 0 */
 
