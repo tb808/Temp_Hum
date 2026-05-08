@@ -94,6 +94,50 @@ void ESP_SendCmd(const char *cmd, uint32_t timeout) {
 	HAL_UART_Transmit(&huart2, (uint8_t*) "\r\n", 2, HAL_MAX_DELAY);
 }
 
+void ESP_Init(void) {
+	HAL_UART_Transmit(&huart2,
+			(uint8_t*) "\r\n--- ESP WLAN Verbinden (Server) ---\r\n", 38,
+			HAL_MAX_DELAY);
+	// 1) Test, Reset, Echo off
+	ESP_SendCmd("AT\r\n", 2000);
+	HAL_Delay(300);
+	ESP_SendCmd("AT+RST\r\n", 5000);
+	HAL_Delay(3000);
+	ESP_SendCmd("ATE0\r\n", 1000); // Echo off
+	HAL_Delay(100);
+	ESP_SendCmd("AT+CIPDINFO=0\r\n", 1000); // kompakter +IPD-Header: +IPD,<len>:<payload>
+	HAL_Delay(100);
+	// 2) Station Mode (CWMODE=1)
+	ESP_SendCmd("AT+CWMODE_DEF=1\r\n", 2000);
+	HAL_Delay(200);
+	// 3) Vorherige WLAN-Verbindung trennen
+	ESP_SendCmd("AT+CWQAP\r\n", 2000);
+	HAL_Delay(200);
+	// 4) Mit Hotspot verbinden (Station)
+	char joinCmd[128];
+	snprintf(joinCmd, sizeof(joinCmd), "AT+CWJAP=\"%s\",\"%s\"\r\n", WIFI_SSID,
+			WIFI_PASS);
+	ESP_SendCmd(joinCmd, 30000);
+	HAL_Delay(1000);
+	// 5) IP anzeigen
+	ESP_SendCmd("AT+CIFSR\r\n", 3000);
+	// 6) Multi-Connection Mode aktivieren
+	ESP_SendCmd("AT+CIPMUX=1\r\n", 2000);
+	HAL_Delay(200);
+
+	ESP_SendCmd("AT+CIPSERVERMAXCONN=4\r\n", 2000);
+	HAL_Delay(200);
+	ESP_SendCmd("AT+CIPSTO=3600\r\n", 2000);   // Timeout 1 Stunde
+	HAL_Delay(200);
+}
+
+void ESP_StartServer(void) {
+	char cmd[64];
+	snprintf(cmd, sizeof(cmd), "AT+CIPSERVER=1,%d\r\n", SERVER_PORT);
+	ESP_SendCmd(cmd, 3000);
+	HAL_Delay(200);
+}
+
 /* USER CODE END 0 */
 
 /**
