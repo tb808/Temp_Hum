@@ -46,7 +46,7 @@ bool esp_connected = false;
 #define RX_BUF_SIZE          1500
 
 // --- WLAN Zugangsdaten ---
-#define WIFI_SSID            "TylerTest"
+#define WIFI_SSID            "Tyler"
 #define WIFI_PASS            "12345678"
 
 // --- Ziel: ESP#2 (TCP-Server) ---
@@ -128,7 +128,7 @@ void sht3x_read(void) {
            temperature_x100 / 100, temperature_x100 % 100, //Werte mit 2 Kommastellen angeben
            humidity_x100 / 100, humidity_x100 % 100);      //Werte mit 2 Kommastellen angeben
 
-  //HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 
 }
 
@@ -347,14 +347,17 @@ int main(void)
   while (1)
   {
 
-	  uint32_t now = HAL_GetTick();
+	 /* uint32_t now = HAL_GetTick();
 	  	      if (now - lastSend >= SEND_INTERVAL_MS) {
 	  	          lastSend = now;
 	  	          SendMeasurementOnce();
 	  	      }
 
 	  	      // (Optional) kleine Pause, um CPU zu schonen
-	  	      HAL_Delay(100);
+	  	      HAL_Delay(100);*/
+
+	  sht3x_read();
+	  HAL_Delay(1000);
 
     /* USER CODE END WHILE */
 
@@ -470,7 +473,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 38400;
+  huart1.Init.BaudRate = 115200;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
