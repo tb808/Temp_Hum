@@ -30,6 +30,22 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+typedef enum {
+	IPD_WAIT_HDR, IPD_READ_HDR, IPD_READ_PAYLOAD
+} ipd_state_t;
+
+typedef struct {
+	uint8_t id;
+	float temperature;
+	float humidity;
+	uint32_t lastUpdate;
+	bool valid;
+} slave_data_t;
+
+typedef enum {
+	UI_MENU, UI_VALUES
+} ui_state_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -43,6 +59,10 @@
 
 // TCP Server-Port
 #define SERVER_PORT 5000
+
+#define IPD_HDR_MAX   64
+
+#define MAX_SLAVES 4
 
 /* USER CODE END PD */
 
@@ -58,6 +78,23 @@ UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+
+static char rxBuf[RX_BUF_SIZE];
+
+static ipd_state_t ipd_state = IPD_WAIT_HDR;
+static char ipd_hdr[IPD_HDR_MAX];
+static uint16_t ipd_hdr_len = 0;
+static int ipd_expect = 0;   // erwartete Nutzlast-Bytes aus Header
+static uint16_t ipd_payload_i = 0;
+
+static void ipd_reset(void) {
+	ipd_state = IPD_WAIT_HDR;
+	ipd_hdr_len = 0;
+	ipd_expect = 0;
+	ipd_payload_i = 0;
+}
+
+slave_data_t slaves[MAX_SLAVES];
 
 /* USER CODE END PV */
 
@@ -157,6 +194,107 @@ static bool ipd_try_parse_len(const char *hdr, int *out_len) {
 		return false;
 	*out_len = len;
 	return true;
+}
+
+void ESP_ProcessIncomingByte(uint8_t ch) {
+	switch (ipd_state) {
+	case IPD_WAIT_HDR:
+		if (ch == '+') {
+			ipd_hdr_len = 0;
+			ipd_hdr[ipd_hdr_len++] = ch;
+			ipd_state = IPD_READ_HDR;
+		}
+		break;
+
+	case IPD_READ_HDR:
+		if (ipd_hdr_len < (IPD_HDR_MAX - 1)) {
+			ipd_hdr[ipd_hdr_len++] = ch;
+			ipd_hdr[ipd_hdr_len] = '\0';
+		} else {
+			ipd_reset();
+			break;
+		}
+		if (ch == ':') {
+			if (strncmp(ipd_hdr, "+IPD", 4) != 0) {
+				ipd_reset();
+				break;
+			}
+			if (!ipd_try_parse_len(ipd_hdr, &ipd_expect)) {
+				ipd_reset();
+				break;
+			}
+			ipd_payload_i = 0;
+			ipd_state = IPD_READ_PAYLOAD;
+		}
+		break;
+
+	case IPD_READ_PAYLOAD:
+		if (ipd_payload_i < (RX_BUF_SIZE - 1)) {
+			rxBuf[ipd_payload_i++] = (char) ch;
+		}
+		if (--ipd_expect == 0) {
+			rxBuf[(ipd_payload_i < RX_BUF_SIZE) ?
+					ipd_payload_i : (RX_BUF_SIZE - 1)] = '\0';
+
+			// CR/LF am Ende entfernen
+			rxBuf[strcspn(rxBuf, "\r\n")] = 0;
+
+			// UART Debugausgabe
+			HAL_UART_Transmit(&huart2, (uint8_t*) "Empfangen: ", 11,
+					HAL_MAX_DELAY);
+			HAL_UART_Transmit(&huart2, (uint8_t*) rxBuf, strlen(rxBuf),
+					HAL_MAX_DELAY);
+			HAL_UART_Transmit(&huart2, (uint8_t*) "\r\n", 2, HAL_MAX_DELAY);
+
+			int ID = -1;
+			int t_int = 0, t_frac = 0;
+			int h_int = 0, h_frac = 0;
+			if (sscanf(rxBuf, "ID=%d;T=%d.%d;H=%d.%d", &ID, &t_int, &t_frac, &h_int, &h_frac) == 5) {
+
+				float t_float = t_int + t_frac / 100.0f;
+				float h_float = h_int + h_frac / 100.0f;
+
+				//Debug ausgabe
+				char dbg[64];
+				snprintf(dbg, sizeof(dbg), "Slave %d -> %.2f°C H=%.2f%%\r\n",
+						ID, t_float, h_float);
+				HAL_UART_Transmit(&huart2, (uint8_t*) dbg, strlen(dbg),
+						HAL_MAX_DELAY);
+
+				if (ID >= 1 && ID <= MAX_SLAVES) {
+					slaves[ID - 1].temperature = t_float;
+					slaves[ID - 1].humidity = h_float;
+					slaves[ID - 1].lastUpdate = HAL_GetTick();
+					slaves[ID - 1].valid = true;
+				}
+				OLED_UpdateValues_Float(ID, t_float, h_float);
+			} else {
+				HAL_UART_Transmit(&huart2, (uint8_t*) "Parsing failed!\r\n", 17,
+						HAL_MAX_DELAY);
+			}
+			ipd_reset();
+		}
+		break;
+	}
+}
+
+void ESP_CheckIncoming(void) {
+	uint8_t ch;
+	uint32_t last_rx_time = HAL_GetTick();
+	bool got_data = false;
+
+	// Sammle alles, was im UART-Puffer liegt (z.B. 50 ms lang)
+	while ((HAL_GetTick() - last_rx_time) < 50) {
+		if (HAL_UART_Receive(&huart1, &ch, 1, 5) == HAL_OK) {
+			got_data = true;
+			last_rx_time = HAL_GetTick();
+			ESP_ProcessIncomingByte(ch);
+		}
+	}
+
+	// Wenn nichts kam, einfach zurück
+	if (!got_data)
+		return;
 }
 
 /* USER CODE END 0 */
