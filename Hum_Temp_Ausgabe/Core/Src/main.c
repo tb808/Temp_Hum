@@ -138,6 +138,27 @@ void ESP_StartServer(void) {
 	HAL_Delay(200);
 }
 
+static bool ipd_try_parse_len(const char *hdr, int *out_len) {
+	// akzeptiere beide Formen:
+	// "+IPD,<len>:" oder
+	// "+IPD,<link>,<len>:"
+	// Wir greifen die letzte Zahl vor ':' als Länge ab.
+	const char *colon = strchr(hdr, ':');
+	if (!colon)
+		return false;
+	// suche letzte Komma-Position vor ':'
+	const char *p = colon - 1;
+	while (p > hdr && *p != ',')
+		p--;
+	if (*p != ',')
+		return false;
+	int len = atoi(p + 1);
+	if (len <= 0)
+		return false;
+	*out_len = len;
+	return true;
+}
+
 /* USER CODE END 0 */
 
 /**
