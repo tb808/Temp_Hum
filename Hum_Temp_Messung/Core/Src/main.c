@@ -50,7 +50,7 @@ bool esp_connected = false;
 #define WIFI_PASS            "12345678"
 
 // --- Ziel: ESP#2 (TCP-Server) ---
-#define ESP2_IP              "10.162.73.104"   // <- später anpassen!
+#define ESP2_IP              "10.49.147.123"   // <- später anpassen!
 #define ESP2_PORT            5000             // <- später anpassen!
 
 // --- Sendeintervall ---
@@ -347,17 +347,16 @@ int main(void)
   while (1)
   {
 
-	 /* uint32_t now = HAL_GetTick();
+	 uint32_t now = HAL_GetTick();
 	  	      if (now - lastSend >= SEND_INTERVAL_MS) {
 	  	          lastSend = now;
 	  	          SendMeasurementOnce();
 	  	      }
 
 	  	      // (Optional) kleine Pause, um CPU zu schonen
-	  	      HAL_Delay(100);*/
+	  	      HAL_Delay(100);
 
-	  sht3x_read();
-	  HAL_Delay(1000);
+
 
     /* USER CODE END WHILE */
 

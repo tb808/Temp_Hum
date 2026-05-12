@@ -35,11 +35,11 @@ typedef enum {
 } ipd_state_t;
 
 typedef struct {
-	uint8_t id;
-	float temperature;
-	float humidity;
-	uint32_t lastUpdate;
-	bool valid;
+	 uint8_t id;
+	 int16_t temperature_x100;  // z.B. 2345 = 23.45°C
+	 int16_t humidity_x100;
+	 uint32_t lastUpdate;
+	 bool valid;
 } slave_data_t;
 
 typedef enum {
@@ -54,7 +54,7 @@ typedef enum {
 #define RX_BUF_SIZE 1500
 
 // WLAN Zugangsdaten (Hotspot)
-#define WIFI_SSID "TylerTest"
+#define WIFI_SSID "Tyler"
 #define WIFI_PASS "12345678"
 
 // TCP Server-Port
@@ -254,20 +254,19 @@ void ESP_ProcessIncomingByte(uint8_t ch) {
 				float t_float = t_int + t_frac / 100.0f;
 				float h_float = h_int + h_frac / 100.0f;
 
-				//Debug ausgabe
-				char dbg[64];
-				snprintf(dbg, sizeof(dbg), "Slave %d -> %.2f°C H=%.2f%%\r\n",
-						ID, t_float, h_float);
-				HAL_UART_Transmit(&huart2, (uint8_t*) dbg, strlen(dbg),
-						HAL_MAX_DELAY);
+				// Debug ohne %f
+				    char dbg[64];
+				    snprintf(dbg, sizeof(dbg), "Slave %d -> %d.%02d°C H=%d.%02d%%\r\n",
+				             ID, t_int, t_frac, h_int, h_frac);
+				    HAL_UART_Transmit(&huart2, (uint8_t*) dbg, strlen(dbg), HAL_MAX_DELAY);
 
-				if (ID >= 1 && ID <= MAX_SLAVES) {
-					slaves[ID - 1].temperature = t_float;
-					slaves[ID - 1].humidity = h_float;
-					slaves[ID - 1].lastUpdate = HAL_GetTick();
-					slaves[ID - 1].valid = true;
-				}
-				OLED_UpdateValues_Float(ID, t_float, h_float);
+				    if (ID >= 1 && ID <= MAX_SLAVES) {
+				    	slaves[ID - 1].temperature_x100 = t_int * 100 + t_frac;
+				    	slaves[ID - 1].humidity_x100    = h_int * 100 + h_frac;
+				        slaves[ID - 1].lastUpdate  = HAL_GetTick();
+				        slaves[ID - 1].valid       = true;
+				    }
+
 			} else {
 				HAL_UART_Transmit(&huart2, (uint8_t*) "Parsing failed!\r\n", 17,
 						HAL_MAX_DELAY);
@@ -333,12 +332,18 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  ESP_Init();
+  ESP_StartServer();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  ESP_CheckIncoming();
+	  HAL_Delay(10);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -453,7 +458,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 38400;
+  huart1.Init.BaudRate = 115200;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
@@ -488,7 +493,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 38400;
+  huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
