@@ -253,9 +253,6 @@ void ESP_ProcessIncomingByte(uint8_t ch) {
 			int h_int = 0, h_frac = 0;
 			if (sscanf(rxBuf, "ID=%d;T=%d.%d;H=%d.%d", &ID, &t_int, &t_frac, &h_int, &h_frac) == 5) {
 
-				float t_float = t_int + t_frac / 100.0f;
-				float h_float = h_int + h_frac / 100.0f;
-
 				// Debug ohne %f
 				    char dbg[64];
 				    snprintf(dbg, sizeof(dbg), "Slave %d -> %d.%02d°C H=%d.%02d%%\r\n",
@@ -298,6 +295,56 @@ void ESP_CheckIncoming(void) {
 		return;
 }
 
+static void FormatFixedX100(char *out, size_t out_size, int16_t value_x100,
+		const char *unit) {
+	int32_t value = value_x100;
+	const char *sign = "";
+
+	if (value < 0) {
+		sign = "-";
+		value = -value;
+	}
+
+	snprintf(out, out_size, "%s%ld.%02ld %s", sign, (long) (value / 100),
+			(long) (value % 100), unit);
+}
+
+void Display_ShowValues(void) {
+	static uint32_t last_refresh = 0;
+	uint32_t now = HAL_GetTick();
+	char line[24];
+
+	if (last_refresh != 0 && (now - last_refresh) < 500) {
+		return;
+	}
+	last_refresh = now;
+
+	ssd1306_Fill(Black);
+
+	if (!slaves[0].valid) {
+		ssd1306_SetCursor(14, 18);
+		ssd1306_WriteString("Warte auf", Font_11x18, White);
+		ssd1306_SetCursor(36, 38);
+		ssd1306_WriteString("Daten", Font_11x18, White);
+		ssd1306_UpdateScreen();
+		return;
+	}
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Temp", Font_7x10, White);
+	FormatFixedX100(line, sizeof(line), slaves[0].temperature_x100, "C");
+	ssd1306_SetCursor(0, 12);
+	ssd1306_WriteString(line, Font_11x18, White);
+
+	ssd1306_SetCursor(0, 33);
+	ssd1306_WriteString("Feuchte", Font_7x10, White);
+	FormatFixedX100(line, sizeof(line), slaves[0].humidity_x100, "%");
+	ssd1306_SetCursor(0, 45);
+	ssd1306_WriteString(line, Font_11x18, White);
+
+	ssd1306_UpdateScreen();
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -334,6 +381,9 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  ssd1306_Init();
+  Display_ShowValues();
+
   ESP_Init();
   ESP_StartServer();
 
@@ -344,6 +394,7 @@ int main(void)
   while (1)
   {
 	  ESP_CheckIncoming();
+	  Display_ShowValues();
 	  HAL_Delay(10);
 
     /* USER CODE END WHILE */
