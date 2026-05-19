@@ -45,8 +45,22 @@ typedef struct {
 } slave_data_t;
 
 typedef enum {
-	UI_MENU, UI_VALUES
+	UI_MENU,
+	UI_MEASUREMENT,
+	UI_CAL_TEMP,
+	UI_CAL_HUM,
+	UI_LIMIT_TEMP_MIN,
+	UI_LIMIT_TEMP_MAX,
+	UI_LIMIT_HUM_MIN,
+	UI_LIMIT_HUM_MAX
 } ui_state_t;
+
+typedef enum {
+	BUTTON_NONE,
+	BUTTON_UP,
+	BUTTON_DOWN,
+	BUTTON_ENTER
+} button_event_t;
 
 /* USER CODE END PTD */
 
@@ -65,6 +79,17 @@ typedef enum {
 #define IPD_HDR_MAX   64
 
 #define MAX_SLAVES 4
+
+#define BUTTON_UP_PORT      GPIOB
+#define BUTTON_UP_PIN       GPIO_PIN_4
+#define BUTTON_DOWN_PORT    GPIOB
+#define BUTTON_DOWN_PIN     GPIO_PIN_5
+#define BUTTON_ENTER_PORT   GPIOA
+#define BUTTON_ENTER_PIN    GPIO_PIN_11
+#define BUTTON_PRESSED      GPIO_PIN_SET
+#define BUTTON_DEBOUNCE_MS  50
+
+#define MENU_ITEM_COUNT 3
 
 /* USER CODE END PD */
 
@@ -97,6 +122,17 @@ static void ipd_reset(void) {
 }
 
 slave_data_t slaves[MAX_SLAVES];
+
+static ui_state_t ui_state = UI_MENU;
+static uint8_t menu_index = 0;
+static bool ui_redraw_requested = true;
+
+static int16_t temperature_offset_c = 0;
+static int16_t humidity_offset_percent = 0;
+static int16_t temperature_min_c = 0;
+static int16_t temperature_max_c = 50;
+static int16_t humidity_min_percent = 0;
+static int16_t humidity_max_percent = 100;
 
 /* USER CODE END PV */
 
@@ -295,54 +331,323 @@ void ESP_CheckIncoming(void) {
 		return;
 }
 
-static void FormatFixedX100(char *out, size_t out_size, int16_t value_x100,
-		const char *unit) {
-	int32_t value = value_x100;
-	const char *sign = "";
-
-	if (value < 0) {
-		sign = "-";
-		value = -value;
+static int16_t ClampInt16(int16_t value, int16_t min, int16_t max) {
+	if (value < min) {
+		return min;
 	}
-
-	snprintf(out, out_size, "%s%ld.%02ld %s", sign, (long) (value / 100),
-			(long) (value % 100), unit);
+	if (value > max) {
+		return max;
+	}
+	return value;
 }
 
-void Display_ShowValues(void) {
-	static uint32_t last_refresh = 0;
+static int16_t RoundX100ToInt(int16_t value_x100) {
+	int32_t value = value_x100;
+
+	if (value < 0) {
+		return (int16_t) -(((-value) + 50) / 100);
+	}
+	return (int16_t) ((value + 50) / 100);
+}
+
+static int16_t GetTemperatureC(void) {
+	return RoundX100ToInt(slaves[0].temperature_x100) + temperature_offset_c;
+}
+
+static int16_t GetHumidityPercent(void) {
+	int16_t humidity = RoundX100ToInt(slaves[0].humidity_x100)
+			+ humidity_offset_percent;
+	return ClampInt16(humidity, 0, 100);
+}
+
+static button_event_t Buttons_ReadEvent(void) {
+	static button_event_t last_raw = BUTTON_NONE;
+	static uint32_t last_change = 0;
+	static bool pressed_latched = false;
+	button_event_t raw = BUTTON_NONE;
 	uint32_t now = HAL_GetTick();
+
+	if (HAL_GPIO_ReadPin(BUTTON_ENTER_PORT, BUTTON_ENTER_PIN) == BUTTON_PRESSED) {
+		raw = BUTTON_ENTER;
+	} else if (HAL_GPIO_ReadPin(BUTTON_UP_PORT, BUTTON_UP_PIN) == BUTTON_PRESSED) {
+		raw = BUTTON_UP;
+	} else if (HAL_GPIO_ReadPin(BUTTON_DOWN_PORT, BUTTON_DOWN_PIN) == BUTTON_PRESSED) {
+		raw = BUTTON_DOWN;
+	}
+
+	if (raw != last_raw) {
+		last_raw = raw;
+		last_change = now;
+	}
+
+	if (raw == BUTTON_NONE) {
+		pressed_latched = false;
+		return BUTTON_NONE;
+	}
+
+	if (pressed_latched || (now - last_change) < BUTTON_DEBOUNCE_MS) {
+		return BUTTON_NONE;
+	}
+
+	pressed_latched = true;
+	return raw;
+}
+
+static void UI_BackToMenu(void) {
+	ui_state = UI_MENU;
+	ui_redraw_requested = true;
+}
+
+static void UI_HandleButton(button_event_t event) {
+	if (event == BUTTON_NONE) {
+		return;
+	}
+
+	switch (ui_state) {
+	case UI_MENU:
+		if (event == BUTTON_UP) {
+			menu_index = (menu_index == 0) ? (MENU_ITEM_COUNT - 1) : (menu_index - 1);
+		} else if (event == BUTTON_DOWN) {
+			menu_index = (menu_index + 1) % MENU_ITEM_COUNT;
+		} else if (event == BUTTON_ENTER) {
+			if (menu_index == 0) {
+				ui_state = UI_MEASUREMENT;
+			} else if (menu_index == 1) {
+				ui_state = UI_CAL_TEMP;
+			} else {
+				ui_state = UI_LIMIT_TEMP_MIN;
+			}
+		}
+		break;
+
+	case UI_MEASUREMENT:
+		if (event == BUTTON_ENTER) {
+			UI_BackToMenu();
+			return;
+		}
+		break;
+
+	case UI_CAL_TEMP:
+		if (event == BUTTON_UP) {
+			temperature_offset_c = ClampInt16(temperature_offset_c + 1, -20, 20);
+		} else if (event == BUTTON_DOWN) {
+			temperature_offset_c = ClampInt16(temperature_offset_c - 1, -20, 20);
+		} else if (event == BUTTON_ENTER) {
+			ui_state = UI_CAL_HUM;
+		}
+		break;
+
+	case UI_CAL_HUM:
+		if (event == BUTTON_UP) {
+			humidity_offset_percent = ClampInt16(humidity_offset_percent + 1, -20, 20);
+		} else if (event == BUTTON_DOWN) {
+			humidity_offset_percent = ClampInt16(humidity_offset_percent - 1, -20, 20);
+		} else if (event == BUTTON_ENTER) {
+			UI_BackToMenu();
+			return;
+		}
+		break;
+
+	case UI_LIMIT_TEMP_MIN:
+		if (event == BUTTON_UP) {
+			temperature_min_c = ClampInt16(temperature_min_c + 1, -40,
+					temperature_max_c);
+		} else if (event == BUTTON_DOWN) {
+			temperature_min_c = ClampInt16(temperature_min_c - 1, -40,
+					temperature_max_c);
+		} else if (event == BUTTON_ENTER) {
+			ui_state = UI_LIMIT_TEMP_MAX;
+		}
+		break;
+
+	case UI_LIMIT_TEMP_MAX:
+		if (event == BUTTON_UP) {
+			temperature_max_c = ClampInt16(temperature_max_c + 1,
+					temperature_min_c, 100);
+		} else if (event == BUTTON_DOWN) {
+			temperature_max_c = ClampInt16(temperature_max_c - 1,
+					temperature_min_c, 100);
+		} else if (event == BUTTON_ENTER) {
+			ui_state = UI_LIMIT_HUM_MIN;
+		}
+		break;
+
+	case UI_LIMIT_HUM_MIN:
+		if (event == BUTTON_UP) {
+			humidity_min_percent = ClampInt16(humidity_min_percent + 1, 0,
+					humidity_max_percent);
+		} else if (event == BUTTON_DOWN) {
+			humidity_min_percent = ClampInt16(humidity_min_percent - 1, 0,
+					humidity_max_percent);
+		} else if (event == BUTTON_ENTER) {
+			ui_state = UI_LIMIT_HUM_MAX;
+		}
+		break;
+
+	case UI_LIMIT_HUM_MAX:
+		if (event == BUTTON_UP) {
+			humidity_max_percent = ClampInt16(humidity_max_percent + 1,
+					humidity_min_percent, 100);
+		} else if (event == BUTTON_DOWN) {
+			humidity_max_percent = ClampInt16(humidity_max_percent - 1,
+					humidity_min_percent, 100);
+		} else if (event == BUTTON_ENTER) {
+			UI_BackToMenu();
+			return;
+		}
+		break;
+	}
+
+	ui_redraw_requested = true;
+}
+
+static void UI_DrawMenu(void) {
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Menu", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 16);
+	ssd1306_WriteString(menu_index == 0 ? "> Messung" : "  Messung",
+			Font_7x10, White);
+	ssd1306_SetCursor(0, 30);
+	ssd1306_WriteString(menu_index == 1 ? "> Kalibrieren" : "  Kalibrieren",
+			Font_7x10, White);
+	ssd1306_SetCursor(0, 44);
+	ssd1306_WriteString(menu_index == 2 ? "> Grenzwerte" : "  Grenzwerte",
+			Font_7x10, White);
+}
+
+static void UI_DrawMeasurement(void) {
 	char line[24];
-
-	if (last_refresh != 0 && (now - last_refresh) < 500) {
-		return;
-	}
-	last_refresh = now;
-
-	ssd1306_Fill(Black);
-
-	if (!slaves[0].valid) {
-		ssd1306_SetCursor(14, 18);
-		ssd1306_WriteString("Warte auf", Font_11x18, White);
-		ssd1306_SetCursor(36, 38);
-		ssd1306_WriteString("Daten", Font_11x18, White);
-		ssd1306_UpdateScreen();
-		return;
-	}
+	int16_t temperature_c;
+	int16_t humidity_percent;
+	uint8_t warning_y = 45;
 
 	ssd1306_SetCursor(0, 0);
-	ssd1306_WriteString("Temp", Font_7x10, White);
-	FormatFixedX100(line, sizeof(line), slaves[0].temperature_x100, "C");
+	ssd1306_WriteString("Messung", Font_7x10, White);
+
+	if (!slaves[0].valid) {
+		ssd1306_SetCursor(0, 20);
+		ssd1306_WriteString("Warte auf", Font_11x18, White);
+		ssd1306_SetCursor(0, 40);
+		ssd1306_WriteString("Daten", Font_11x18, White);
+		return;
+	}
+
+	temperature_c = GetTemperatureC();
+	humidity_percent = GetHumidityPercent();
+
+	snprintf(line, sizeof(line), "T:%d C", temperature_c);
 	ssd1306_SetCursor(0, 12);
 	ssd1306_WriteString(line, Font_11x18, White);
 
-	ssd1306_SetCursor(0, 33);
-	ssd1306_WriteString("Feuchte", Font_7x10, White);
-	FormatFixedX100(line, sizeof(line), slaves[0].humidity_x100, "%");
-	ssd1306_SetCursor(0, 45);
+	snprintf(line, sizeof(line), "H:%d %%", humidity_percent);
+	ssd1306_SetCursor(0, 30);
 	ssd1306_WriteString(line, Font_11x18, White);
 
+	if (temperature_c < temperature_min_c) {
+		ssd1306_SetCursor(0, warning_y);
+		ssd1306_WriteString("Temp unter Min", Font_6x8, White);
+		warning_y += 9;
+	} else if (temperature_c > temperature_max_c) {
+		ssd1306_SetCursor(0, warning_y);
+		ssd1306_WriteString("Temp ueber Max", Font_6x8, White);
+		warning_y += 9;
+	}
+
+	if (humidity_percent < humidity_min_percent) {
+		ssd1306_SetCursor(0, warning_y);
+		ssd1306_WriteString("Feuchte unter Min", Font_6x8, White);
+	} else if (humidity_percent > humidity_max_percent) {
+		ssd1306_SetCursor(0, warning_y);
+		ssd1306_WriteString("Feuchte ueber Max", Font_6x8, White);
+	}
+}
+
+static void UI_DrawCalibration(void) {
+	char line[24];
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Kalibrieren", Font_7x10, White);
+
+	if (ui_state == UI_CAL_TEMP) {
+		ssd1306_SetCursor(0, 18);
+		ssd1306_WriteString("Temp Offset", Font_7x10, White);
+		snprintf(line, sizeof(line), "%+d C", temperature_offset_c);
+	} else {
+		ssd1306_SetCursor(0, 18);
+		ssd1306_WriteString("Feuchte Offset", Font_7x10, White);
+		snprintf(line, sizeof(line), "%+d %%", humidity_offset_percent);
+	}
+
+	ssd1306_SetCursor(0, 32);
+	ssd1306_WriteString(line, Font_11x18, White);
+	ssd1306_SetCursor(0, 56);
+	ssd1306_WriteString("UP/DOWN  ENTER", Font_6x8, White);
+}
+
+static void UI_DrawLimitValue(const char *label, int16_t value,
+		const char *unit) {
+	char line[24];
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Grenzwerte", Font_7x10, White);
+	ssd1306_SetCursor(0, 18);
+	ssd1306_WriteString((char*) label, Font_7x10, White);
+
+	snprintf(line, sizeof(line), "%d %s", value, unit);
+	ssd1306_SetCursor(0, 32);
+	ssd1306_WriteString(line, Font_11x18, White);
+	ssd1306_SetCursor(0, 56);
+	ssd1306_WriteString("UP/DOWN  ENTER", Font_6x8, White);
+}
+
+static void UI_Draw(void) {
+	ssd1306_Fill(Black);
+
+	switch (ui_state) {
+	case UI_MENU:
+		UI_DrawMenu();
+		break;
+	case UI_MEASUREMENT:
+		UI_DrawMeasurement();
+		break;
+	case UI_CAL_TEMP:
+	case UI_CAL_HUM:
+		UI_DrawCalibration();
+		break;
+	case UI_LIMIT_TEMP_MIN:
+		UI_DrawLimitValue("Temp Min", temperature_min_c, "C");
+		break;
+	case UI_LIMIT_TEMP_MAX:
+		UI_DrawLimitValue("Temp Max", temperature_max_c, "C");
+		break;
+	case UI_LIMIT_HUM_MIN:
+		UI_DrawLimitValue("Feuchte Min", humidity_min_percent, "%");
+		break;
+	case UI_LIMIT_HUM_MAX:
+		UI_DrawLimitValue("Feuchte Max", humidity_max_percent, "%");
+		break;
+	}
+
 	ssd1306_UpdateScreen();
+}
+
+void UI_Update(void) {
+	static uint32_t last_refresh = 0;
+	uint32_t now = HAL_GetTick();
+
+	UI_HandleButton(Buttons_ReadEvent());
+
+	if (!ui_redraw_requested && ui_state == UI_MEASUREMENT
+			&& (now - last_refresh) >= 500) {
+		ui_redraw_requested = true;
+	}
+
+	if (ui_redraw_requested) {
+		UI_Draw();
+		last_refresh = now;
+		ui_redraw_requested = false;
+	}
 }
 
 /* USER CODE END 0 */
@@ -382,7 +687,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   ssd1306_Init();
-  Display_ShowValues();
+  UI_Update();
 
   ESP_Init();
   ESP_StartServer();
@@ -394,7 +699,7 @@ int main(void)
   while (1)
   {
 	  ESP_CheckIncoming();
-	  Display_ShowValues();
+	  UI_Update();
 	  HAL_Delay(10);
 
     /* USER CODE END WHILE */
